@@ -83,7 +83,7 @@ def analyze_video(video_path):
 
 st.title("🛡 DeepGuard – Server-Centric Detection")
 
-query_params = st.experimental_get_query_params()
+query_params = st.query_params
 video_name = query_params.get("video", [None])[0]
 
 if video_name:
