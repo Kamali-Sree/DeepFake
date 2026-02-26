@@ -2,7 +2,7 @@ streamlit
 torch
 torchvision
 facenet-pytorch
-opencv-python
+opencv-python-headless
 grad-cam
 numpy
 pillow
