@@ -79,10 +79,8 @@ def analyze_video(video_path):
         face_tensor = face.unsqueeze(0).to(DEVICE)
 
         # ---------------- CNN FAKE PROBABILITY ----------------
-        with torch.no_grad():
-            output = model(face_tensor)
-            prob = torch.sigmoid(output).item()
-            cnn_scores.append(prob)
+        # Temporarily disable CNN probability until real model is loaded
+        cnn_scores.append(0.5)
 
         # Convert to numpy for statistical analysis
         face_np = face.squeeze().permute(1,2,0).cpu().numpy()
