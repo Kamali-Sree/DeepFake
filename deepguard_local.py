@@ -67,6 +67,7 @@ def analyze_video(video_path):
     sharpness_scores = []
     frame_diffs = []
     frequency_scores = []
+    cnn_scores = []   # NEW
     heatmap_output = None
 
     prev_face_gray = None
@@ -80,6 +81,12 @@ def analyze_video(video_path):
             continue
 
         face_tensor = face.unsqueeze(0).to(DEVICE)
+
+        # ---------------- CNN FAKE PROBABILITY ----------------
+        with torch.no_grad():
+            output = model(face_tensor)
+            prob = torch.sigmoid(output).item()
+            cnn_scores.append(prob)
 
         # Convert to numpy for statistical analysis
         face_np = face.squeeze().permute(1,2,0).cpu().numpy()
@@ -111,21 +118,23 @@ def analyze_video(video_path):
     if len(sharpness_scores) == 0:
         return {"error": "No face detected"}
 
-    # Variance calculations
+    # ---------------- AGGREGATION ----------------
     sharpness_var = np.var(sharpness_scores)
     motion_var = np.var(frame_diffs) if len(frame_diffs) > 0 else 0
     frequency_var = np.var(frequency_scores) if len(frequency_scores) > 0 else 0
+    cnn_mean = np.mean(cnn_scores) if len(cnn_scores) > 0 else 0
 
     # ---------------- NORMALIZATION ----------------
     sharpness_norm = sharpness_var / (sharpness_var + 100000)
     motion_norm = motion_var / (motion_var + 500)
     frequency_norm = frequency_var / (frequency_var + 1000)
 
-    # ---------------- HYBRID FUSION ----------------
+    # ---------------- FINAL HYBRID FUSION ----------------
     final_score = (
-        0.4 * sharpness_norm +
-        0.3 * motion_norm +
-        0.3 * frequency_norm
+        0.4 * cnn_mean +          # CNN Deepfake Probability
+        0.25 * sharpness_norm +   # Spatial
+        0.2 * motion_norm +       # Temporal
+        0.15 * frequency_norm     # Frequency
     )
 
     # ---------------- LABEL ----------------
@@ -139,12 +148,12 @@ def analyze_video(video_path):
     return {
         "score": round(final_score, 3),
         "label": label,
+        "cnn_score": round(cnn_mean, 3),
         "sharpness_var": round(sharpness_var, 3),
         "motion_var": round(motion_var, 3),
         "frequency_var": round(frequency_var, 3),
         "heatmap": heatmap_output
     }
-
 # ---------------- UI ----------------
 st.title("🛡 DeepGuard – Hybrid Deepfake Detection Prototype")
 
