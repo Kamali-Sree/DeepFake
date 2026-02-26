@@ -158,6 +158,3 @@ if uploaded_video is not None:
             st.subheader("Explainability (Grad-CAM)")
             st.image(result["heatmap"], use_column_width=True) 
 
-streamlit run deepguard_local.py
-
-what is this..and how to do it
