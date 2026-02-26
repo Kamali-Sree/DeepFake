@@ -113,9 +113,15 @@ def analyze_video(video_path):
 
     # ----------- FUSION SCORE ------------
     final_score = 0.6 * sharpness_var + 0.4 * motion_var
+    
 
-    # Normalize score to 0–1 range
-    final_score = min(final_score / 1000, 1.0)
+
+    # ----------- FUSION SCORE (Calibrated) ------------
+
+    sharpness_norm = sharpness_var / (sharpness_var + 100000)
+    motion_norm = motion_var / (motion_var + 500)
+
+    final_score = 0.6 * sharpness_norm + 0.4 * motion_norm
 
     if final_score < 0.4:
         label = "Likely Authentic"
