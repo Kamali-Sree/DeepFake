@@ -17,7 +17,7 @@ def load_model():
     model = models.mobilenet_v2(pretrained=True)
     model.eval()
     model.to(DEVICE)
-    return model model
+    return model
 
 model = load_model()
 
