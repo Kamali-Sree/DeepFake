@@ -1,16 +1,40 @@
 import streamlit as st
-import cv2
-import numpy as np
-import os
 import torch
+import torch.nn as nn
+import numpy as np
+import cv2
+import os
+from torchvision import models, transforms
 from facenet_pytorch import MTCNN
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
 
+# ---------------- CONFIG ----------------
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+FRAME_SAMPLE_COUNT = 12
+
+# ---------------- LOAD MODEL ----------------
+@st.cache_resource
+def load_model():
+    model = models.mobilenet_v2(pretrained=True)
+    model.eval()
+    model.to(DEVICE)
+    return model
+
+model = load_model()
+
+# ---------------- FACE DETECTOR ----------------
 mtcnn = MTCNN(keep_all=False, device=DEVICE)
 
-VIDEO_FOLDER = "videos"
+# ---------------- TRANSFORM ----------------
+transform = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((224, 224)),
+    transforms.ToTensor()
+])
 
-def sample_frames(video_path, n=12):
+# ---------------- FRAME SAMPLING ----------------
+def sample_frames(video_path, n=FRAME_SAMPLE_COUNT):
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     interval = max(total // n, 1)
@@ -28,33 +52,58 @@ def sample_frames(video_path, n=12):
     cap.release()
     return frames
 
+# ---------------- GRAD CAM ----------------
+def generate_gradcam(face_tensor):
+    target_layers = [model.features[-1]]
+    cam = GradCAM(model=model, target_layers=target_layers)
+
+    grayscale_cam = cam(input_tensor=face_tensor)[0]
+    face_np = face_tensor.squeeze().permute(1,2,0).cpu().numpy()
+    face_np = np.clip(face_np, 0, 1)
+
+    heatmap = show_cam_on_image(face_np, grayscale_cam, use_rgb=True)
+    return heatmap
+
+# ---------------- ANALYSIS ----------------
 def analyze_video(video_path):
 
     frames = sample_frames(video_path)
 
     sharpness_scores = []
     frame_diffs = []
-    prev_gray = None
+    heatmap_output = None
+
+    prev_face_gray = None
 
     for frame in frames:
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         face = mtcnn(rgb)
 
         if face is None:
             continue
 
+        face_tensor = face.unsqueeze(0).to(DEVICE)
+
+        # Convert to numpy for statistical analysis
         face_np = face.squeeze().permute(1,2,0).cpu().numpy()
         face_np = (face_np * 255).astype(np.uint8)
         gray = cv2.cvtColor(face_np, cv2.COLOR_RGB2GRAY)
 
+        # 1️⃣ Sharpness (Laplacian variance)
         sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
         sharpness_scores.append(sharpness)
 
-        if prev_gray is not None:
-            diff = np.mean(np.abs(gray - prev_gray))
+        # 2️⃣ Frame-to-frame difference
+        if prev_face_gray is not None:
+            diff = np.mean(np.abs(gray - prev_face_gray))
             frame_diffs.append(diff)
 
-        prev_gray = gray
+        prev_face_gray = gray
+
+        # Generate one heatmap for demo
+        if heatmap_output is None:
+            heatmap_output = generate_gradcam(face_tensor)
 
     if len(sharpness_scores) == 0:
         return {"error": "No face detected"}
@@ -62,7 +111,10 @@ def analyze_video(video_path):
     sharpness_var = np.var(sharpness_scores)
     motion_var = np.var(frame_diffs) if len(frame_diffs) > 0 else 0
 
+    # ----------- FUSION SCORE ------------
     final_score = 0.6 * sharpness_var + 0.4 * motion_var
+
+    # Normalize score to 0–1 range
     final_score = min(final_score / 1000, 1.0)
 
     if final_score < 0.4:
@@ -76,39 +128,32 @@ def analyze_video(video_path):
         "score": round(final_score, 3),
         "label": label,
         "sharpness_var": round(sharpness_var, 3),
-        "motion_var": round(motion_var, 3)
+        "motion_var": round(motion_var, 3),
+        "heatmap": heatmap_output
     }
 
 # ---------------- UI ----------------
+st.title("🛡 DeepGuard – Local Deepfake Prototype")
 
-st.title("🛡 DeepGuard – Server-Centric Detection")
+uploaded_video = st.file_uploader("Upload Video", type=["mp4", "mov", "avi"])
 
-query_params = st.query_params
-video_name = query_params.get("video", [None])[0]
+if uploaded_video is not None:
+    with open("temp_video.mp4", "wb") as f:
+        f.write(uploaded_video.read())
 
-if video_name:
-    st.info(f"Analyzing video: {video_name}")
-    video_path = os.path.join(VIDEO_FOLDER, video_name)
+    st.info("Analyzing video...")
 
-    if os.path.exists(video_path):
-        result = analyze_video(video_path)
-        if "error" in result:
-            st.error(result["error"])
-        else:
-            st.subheader("Detection Result")
-            st.write("Score:", result["score"])
-            st.write("Label:", result["label"])
-            st.write("Sharpness Variance:", result["sharpness_var"])
-            st.write("Motion Variance:", result["motion_var"])
+    result = analyze_video("temp_video.mp4")
+
+    if "error" in result:
+        st.error(result["error"])
     else:
-        st.error("Video not found in videos folder.")
+        st.subheader("Detection Result")
+        st.write("Final Score:", result["score"])
+        st.write("Label:", result["label"])
+        st.write("Sharpness Variance:", result["sharpness_var"])
+        st.write("Motion Variance:", result["motion_var"])
 
-else:
-    st.write("Upload or specify video parameter.")
-    uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
-    if uploaded_video:
-        os.makedirs(VIDEO_FOLDER, exist_ok=True)
-        video_path = os.path.join(VIDEO_FOLDER, uploaded_video.name)
-        with open(video_path, "wb") as f:
-            f.write(uploaded_video.read())
-        st.success("Uploaded. Reload with ?video=" + uploaded_video.name)
+        if result["heatmap"] is not None:
+            st.subheader("Explainability (Grad-CAM)")
+            st.image(result["heatmap"], use_column_width=True)
