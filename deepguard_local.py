@@ -15,13 +15,9 @@ FRAME_SAMPLE_COUNT = 12
 @st.cache_resource
 def load_model():
     model = models.mobilenet_v2(pretrained=True)
-    
-    # Replace final classifier layer
-    model.classifier[1] = torch.nn.Linear(model.last_channel, 1)
-    
     model.eval()
     model.to(DEVICE)
-    return model
+    return model model
 
 model = load_model()
 
