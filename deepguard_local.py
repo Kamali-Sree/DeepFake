@@ -15,13 +15,8 @@ FRAME_SAMPLE_COUNT = 12
 @st.cache_resource
 def load_model():
     model = models.mobilenet_v2(pretrained=True)
-
-    # Replace classifier with binary output
-    model.classifier[1] = torch.nn.Linear(model.last_channel, 1)
-
     model.eval()
     model.to(DEVICE)
-
     return model
 
 model = load_model()
@@ -68,7 +63,6 @@ def analyze_video(video_path):
     sharpness_scores = []
     frame_diffs = []
     frequency_scores = []
-    cnn_scores = []   # NEW
     heatmap_output = None
 
     prev_face_gray = None
@@ -83,60 +77,52 @@ def analyze_video(video_path):
 
         face_tensor = face.unsqueeze(0).to(DEVICE)
 
-        # ---------------- CNN FAKE PROBABILITY ----------------
-        # Temporarily disable CNN probability until real model is loaded
-        cnn_scores.append(0.5)
-
         # Convert to numpy for statistical analysis
         face_np = face.squeeze().permute(1,2,0).cpu().numpy()
         face_np = (face_np * 255).astype(np.uint8)
         gray = cv2.cvtColor(face_np, cv2.COLOR_RGB2GRAY)
 
-        # 1️⃣ Sharpness (Spatial)
+        # 1️⃣ Spatial (Sharpness)
         sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
         sharpness_scores.append(sharpness)
 
-        # 2️⃣ Temporal Difference
+        # 2️⃣ Temporal
         if prev_face_gray is not None:
             diff = np.mean(np.abs(gray - prev_face_gray))
             frame_diffs.append(diff)
 
         prev_face_gray = gray
 
-        # 3️⃣ Frequency Domain Analysis (FFT)
+        # 3️⃣ Frequency
         fft = np.fft.fft2(gray)
         fft_shift = np.fft.fftshift(fft)
         magnitude = np.log(np.abs(fft_shift) + 1)
         frequency_energy = np.mean(magnitude)
         frequency_scores.append(frequency_energy)
 
-        # Generate one heatmap for demo
         if heatmap_output is None:
             heatmap_output = generate_gradcam(face_tensor)
 
     if len(sharpness_scores) == 0:
         return {"error": "No face detected"}
 
-    # ---------------- AGGREGATION ----------------
+    # Variance
     sharpness_var = np.var(sharpness_scores)
     motion_var = np.var(frame_diffs) if len(frame_diffs) > 0 else 0
     frequency_var = np.var(frequency_scores) if len(frequency_scores) > 0 else 0
-    cnn_mean = np.mean(cnn_scores) if len(cnn_scores) > 0 else 0
 
-    # ---------------- NORMALIZATION ----------------
+    # Normalization
     sharpness_norm = sharpness_var / (sharpness_var + 100000)
     motion_norm = motion_var / (motion_var + 500)
     frequency_norm = frequency_var / (frequency_var + 1000)
 
-    # ---------------- FINAL HYBRID FUSION ----------------
+    # Hybrid Fusion
     final_score = (
-        0.4 * cnn_mean +          # CNN Deepfake Probability
-        0.25 * sharpness_norm +   # Spatial
-        0.2 * motion_norm +       # Temporal
-        0.15 * frequency_norm     # Frequency
+        0.4 * sharpness_norm +
+        0.3 * motion_norm +
+        0.3 * frequency_norm
     )
 
-    # ---------------- LABEL ----------------
     if final_score < 0.4:
         label = "🟢 Likely Authentic"
     elif final_score < 0.7:
@@ -147,12 +133,12 @@ def analyze_video(video_path):
     return {
         "score": round(final_score, 3),
         "label": label,
-        "cnn_score": round(cnn_mean, 3),
         "sharpness_var": round(sharpness_var, 3),
         "motion_var": round(motion_var, 3),
         "frequency_var": round(frequency_var, 3),
         "heatmap": heatmap_output
     }
+
 # ---------------- UI ----------------
 st.title("🛡 DeepGuard – Hybrid Deepfake Detection Prototype")
 
@@ -170,7 +156,9 @@ if uploaded_video is not None:
         st.error(result["error"])
     else:
         st.subheader("Detection Result")
-        st.write("Final Score:", result["score"])
+        score_percentage = int(result["score"] * 100)
+        st.markdown(f"## Deepfake Risk Score: {score_percentage}%")
+        st.progress(result["score"])
         st.write("Label:", result["label"])
         st.write("Spatial Variance:", result["sharpness_var"])
         st.write("Temporal Variance:", result["motion_var"])
